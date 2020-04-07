@@ -1,0 +1,157 @@
+ELK - Elastic Stack on Ubuntu - Notes
+---------------------------------------------------------------------------------
+1. Install Oracle Java
+	sudo apt-add-repository ppa:webupd8team/java
+	sudo apt-get update
+	sudo apt-get install oracle-java8-installer
+	
+	OPENJDK
+	sudo apt install openjdk-8-jdk
+	java -version
+		openjdk version "1.8.0_212"
+		OpenJDK Runtime Environment (build 1.8.0_212-8u212-b03-0ubuntu1.18.04.1-b03)
+		OpenJDK 64-Bit Server VM (build 25.212-b03, mixed mode)
+	export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-amd64
+	
+
+2. Install ElasticSearch on all nodes
+
+#step 2.1
+	wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+
+#step 2.2
+	sudo apt-get install apt-transport-https
+
+#step 2.3
+	echo "deb https://artifacts.elastic.co/packages/6.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-6.x.list
+
+#step 2.4
+	sudo apt-get update && sudo apt-get install elasticsearch
+
+#step 2.5
+	sudo /bin/systemctl daemon-reload
+	sudo /bin/systemctl enable elasticsearch.service
+	
+	#Ubuntu SysV.init
+	sudo update-rc.d elasticsearch defaults 95 10
+
+#step 2.6
+	sudo systemctl start elasticsearch.service
+	sudo systemctl stop elasticsearch.service
+	
+	#Ubuntu SysV.init
+	sudo -i service elasticsearch start
+	sudo -i service elasticsearch stop
+
+#step 2.7. Elasticsearch Configuration		
+	
+	# Elasticsearch Master/No-Data	- CMS1	
+		cluster.name: cms-cluster
+		node.name: cms1
+		node.master: true
+		node.data: false
+		network.host: 192.168.1.235
+		discovery.zen.ping.unicast.hosts: ["192.168.1.159", "192.168.1.154"] 
+		
+	
+	# Elasticsearch Master/Data		- CMS2
+		cluster.name: cms-cluster
+		node.name: cms2
+		#node.master: true # Leave unconfigured
+		node.data: true 
+		network.host: 192.168.1.159
+		discovery.zen.ping.unicast.hosts: ["192.168.1.235", "192.168.1.154"] 
+	
+	# Elasticsearch Data only		- CMS3
+		cluster.name: cms-cluster
+		node.name: cms3
+		node.master: false # configured false! data only
+		node.data: true 
+		network.host: 192.168.1.154
+		discovery.zen.ping.unicast.hosts: ["192.168.1.235", "192.168.1.159"] 
+
+#step 2.8 Enable Firewall and open ports
+		sudo ufw allow 22/tcp
+		sudo ufw allow 9200/tcp
+		sudo ufw allow 9300/tcp
+		sudo ufw enable
+		sudo reboot
+		
+3. Install Logstash on Master Node (CMS1)
+	sudo apt-get install logstash
+	sudo /bin/systemctl daemon-reload
+	sudo /bin/systemctl enable logstash.service
+	sudo systemctl start logstash.service && sudo systemctl status logstash.service
+	sudo systemctl stop logstash.service
+	
+	# Configure Logstash	
+	http.host: "cms1"
+	
+	# Test config
+	sudo /usr/share/logstash/bin/logstash -t -f /etc/logstash/conf.d/ --path.settings /etc/logstash
+
+4. Install Kibana on Master Node (CMS1)
+	sudo apt-get install kibana
+	sudo /bin/systemctl daemon-reload
+	sudo /bin/systemctl enable kibana.service
+	sudo systemctl start kibana.service
+	sudo systemctl stop kibana.service
+	
+	# Configure Kibana
+		server.host: cms1
+		server.name: "Checkpoint MySQL Standard Master Node"
+		elasticsearch.url: "http://cms1:9200"
+		
+5. Install Filebeat on CMS & CMN to ship logs to CMS1
+	sudo apt-get install filebeat
+	sudo systemctl enable filebeat
+	# Configure Filebeats
+	@see filebeat.yml
+	
+	
+	
+	
+6. Install Nginx on CMS1
+	sudo apt-get install nginx
+		
+	# Configure Nginx - /etc/nginx/sites-enabled/kibana
+		server {
+			listen 80;
+			server_name cms1.thalesgroup.local;
+			location / {
+					proxy_pass http://cms1:5601;
+					proxy_http_version 1.1;
+					proxy_set_header Upgrade $http_upgrade;
+					proxy_set_header Connection 'upgrade';
+					proxy_set_header Host $host;
+					proxy_cache_bypass $http_upgrade;
+				}
+		}
+
+7.  Logging and profiling MySQL
+	# Configure extra logging in /etc/mysql/conf.d/mysql.cnf
+	[mysql]
+	general_log      = 1
+	general_log_file = /var/log/mysql/mysql.log
+	slow_query_log   = 1
+	slow_query_log_file = /var/log/mysql/mysql-slow.log
+	long_query_time = 1
+	log_queries_not_using_indexes = 1
+
+	# After turning on logs
+	# Edit the file: /etc/apparmor.d/local/usr.sbin.mysqld
+	# Add these lines below
+	# Allow proc and system access
+	@PROC/@{pid}/status r,
+	/sys/devices/system/node/ r,
+	/sys/devices/system/node/node0/meminfo r,/proc/*/status r,
+	/sys/devices/system/node/ r,
+	/sys/devices/system/node/node0/meminfo r,
+	
+	#Edit the file /etc/apparmor.d/usr.sbin.mysqld
+	#Add this to the bottom end
+	# Site-specific additions and overrides. See local/README for details.
+	include /etc/apparmor.d/local/usr.sbin.mysqld
+
+	sudo systemctl restart apparmor
+	
